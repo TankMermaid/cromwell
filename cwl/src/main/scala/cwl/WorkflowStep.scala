@@ -188,13 +188,12 @@ case class WorkflowStep(
               }
           }
 
-          def updateFold(sourceMappings: Map[String, OutputPort], newNodes: Set[GraphNode]): Checked[WorkflowStepInputFold] =
-            workflowStepInput.toExpressionNode(sourceMappings, typeMap, expressionLib).map({ expressionNode =>
-              fold |+| WorkflowStepInputFold(
-                stepInputMapping = Map(FullyQualifiedName(workflowStepInput.id).id -> expressionNode),
-                generatedNodes = newNodes + expressionNode
-              )
-            }).toEither
+          def updateFold(sourceMappings: Map[String, OutputPort], newNodes: Set[GraphNode]): WorkflowStepInputFold = {
+            fold |+| WorkflowStepInputFold(
+              stepInputMappings = Map(workflowStepInput -> sourceMappings),
+              generatedNodes = newNodes
+            )
+          }
 
           /*
            * We intend to validate that all of these sources point to a WOM Outputport that we know about.
@@ -222,7 +221,7 @@ case class WorkflowStep(
               case (other, _) => other
             }
 
-          inputMappingsAndGraphNodes.flatMap((updateFold _).tupled)
+          inputMappingsAndGraphNodes.map((updateFold _).tupled)
       }
 
       /*
@@ -262,6 +261,8 @@ case class WorkflowStep(
             ).validNel
         }
       }
+      
+      def buildNonScatteredStepInputExpressionNodes()
 
       //inputs base case consist of the nodes we already know about
       val baseCase = WorkflowStepInputFold(generatedNodes = knownNodes).asRight[NonEmptyList[String]]
@@ -283,15 +284,17 @@ case class WorkflowStep(
        */
       for {
         stepInputFold <- stepInputFoldCheck
+        stepInputMappings <- stepInputFold.makeExpressionNodes(typeMap, expressionLib).toEither
+        generatedNodes = stepInputFold.generatedNodes ++ stepInputMappings.values.toSet
         checkedCallable <- callable
-        scatterVariables <- ScatterLogic.buildScatterVariables(scatter, stepInputFold, unqualifiedStepId.localName.value)
-        inputDefinitionFold <- checkedCallable.inputs.foldMap(foldInputDefinition(stepInputFold.stepInputMapping, scatterVariables)).toEither
+        scatterVariables <- ScatterLogic.buildScatterVariables2(scatter, stepInputFold.stepInputMappings, typeMap, expressionLib)
+        inputDefinitionFold <- checkedCallable.inputs.foldMap(foldInputDefinition(stepInputMappings, scatterVariables)).toEither
         callAndNodes = callNodeBuilder.build(unqualifiedStepId, checkedCallable, inputDefinitionFold)
         allNodes <- if (scatterVariables.nonEmpty) {
           // NB: Pattern matching the scatterVariables against "head :: tail" to build a NeL doesn't work because the compiler takes :: for the shapeless operator
-          ScatterLogic.prepareNodesForScatteredCall(knownNodes, callAndNodes, stepInputFold, NonEmptyList.fromListUnsafe(scatterVariables), scatterMethod)
+          ScatterLogic.prepareNodesForScatteredCall(knownNodes, callAndNodes, generatedNodes, NonEmptyList.fromListUnsafe(scatterVariables), scatterMethod)
         } else {
-          (knownNodes ++ callAndNodes.nodes ++ stepInputFold.generatedNodes).validNelCheck
+          (knownNodes ++ callAndNodes.nodes ++ generatedNodes).validNelCheck
         }
       } yield allNodes
     }
@@ -311,14 +314,38 @@ object WorkflowStep {
     override def empty: WorkflowStepInputFold = WorkflowStepInputFold()
     override def combine(x: WorkflowStepInputFold, y: WorkflowStepInputFold): WorkflowStepInputFold = {
       WorkflowStepInputFold(
-        stepInputMapping = x.stepInputMapping ++ y.stepInputMapping,
+        stepInputMappings = x.stepInputMappings ++ y.stepInputMappings,
         generatedNodes = x.generatedNodes ++ y.generatedNodes
       )
     }
   }
 
-  private [cwl] case class WorkflowStepInputFold(stepInputMapping: Map[String, ExpressionNode] = Map.empty,
-                                                 generatedNodes: Set[GraphNode] = Set.empty)
+  private [cwl] case class WorkflowStepInputFold(stepInputMappings: Map[WorkflowStepInput, Map[String, OutputPort]] = Map.empty,
+                                                 generatedNodes: Set[GraphNode] = Set.empty) {
+    import cats.syntax.traverse._
+    import cats.instances.list._
+
+    def makeExpressionNodes(typeMap: WomTypeMap, expressionLib: ExpressionLib)(implicit parentName: ParentName): ErrorOr[Map[String, ExpressionNode]] = {
+      stepInputMappings.toList.traverse[ErrorOr, (String, ExpressionNode)]({
+        case (stepInput, inputMappings) =>
+          val stepId = FullyQualifiedName(stepInput.id).id
+          val otherInputs = stepInputMappings - stepInput
+          val completeInputMappings = otherInputs.toList.traverse[ErrorOr, Option[(String, OutputPort)]]({
+            case (siblingStepInput, siblingInputMappings) =>
+              val siblingId = FullyQualifiedName(siblingStepInput.id).id
+              if (siblingInputMappings.size > 1) "Multiple sources for workflow step inputs not supported yet".invalidNel
+              else {
+                siblingInputMappings.headOption.map(_._2).map(siblingId -> _).validNel
+              }
+          }).map(_.flatten.toMap ++ inputMappings)
+
+          (for {
+            mappings <- completeInputMappings.toEither
+            expresionNode <- stepInput.toExpressionNode(mappings, typeMap, expressionLib).toEither
+          } yield stepId -> expresionNode).toValidated
+      }).map(_.toMap)
+    }
+  }
 
   /**
     * Maps input variable (to be scattered over) to their scatter variable node

@@ -25,10 +25,13 @@ case class WorkflowStepInput(
   default: Option[CwlAny] = None,
   valueFrom: Option[StringOrExpression] = None) {
   
-  def toExpressionNode(sourceMappings: Map[String, OutputPort],
+  def toExpressionNode(allStepInputMappings: Map[WorkflowStepInput, Map[String, OutputPort]],
                        outputTypeMap: Map[String, WomType],
                        expressionLib: ExpressionLib
                       )(implicit parentName: ParentName): ErrorOr[ExpressionNode] = {
+    
+    val ownInputMappings = allStepInputMappings(this)
+    val otherInputsMappings
 
     val sources = source.toList.flatMap(_.fold(WorkflowStepInputSourceToStrings))
 
