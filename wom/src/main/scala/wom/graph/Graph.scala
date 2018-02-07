@@ -53,7 +53,11 @@ object Graph {
 
     def upstreamNodeInGraph(port: InputPort): ErrorOr[Unit] = {
       val upstreamOutputPort = port.upstream
-      boolToErrorOr(nodes.exists(_ eq upstreamOutputPort.graphNode), s"The input link ${port.name} on ${port.graphNode.localName} is linked to a node outside the graph set (${upstreamOutputPort.name})")
+      val a = boolToErrorOr(nodes.exists(_ eq upstreamOutputPort.graphNode), s"The input link ${port.name} on ${port.graphNode.localName} is linked to a node outside the graph set (${upstreamOutputPort.name})")
+      if (a.isInvalid) {
+        println("lol")
+      }
+      a
     }
 
     def portProperlyEmbedded(port: GraphNodePort, portFinder: GraphNode => Set[_ <: GraphNodePort]): ErrorOr[Unit] = {

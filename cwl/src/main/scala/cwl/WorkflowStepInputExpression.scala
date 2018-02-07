@@ -1,13 +1,12 @@
 package cwl
 
 import cats.data.NonEmptyList
-import cats.syntax.validated._
+import cats.instances.list._
 import cats.syntax.either._
 import cats.syntax.traverse._
-import cats.instances.list._
+import cats.syntax.validated._
 import common.Checked
 import common.validation.ErrorOr.ErrorOr
-import cwl.WorkflowStepInput.InputSource
 import cwl.command.ParentName
 import mouse.all._
 import wom.expression.IoFunctionSet
@@ -17,7 +16,7 @@ import wom.values._
 final case class WorkflowStepInputExpression(input: WorkflowStepInput,
                                              override val cwlExpressionType: WomType,
                                              graphInputs: Set[String],
-                                             override val expressionLib: ExpressionLib)(implicit parentName: ParentName) extends CwlWomExpression {
+                                             override val expressionLib: ExpressionLib) extends CwlWomExpression {
 
   override def sourceString = input.toString
 
@@ -25,10 +24,15 @@ final case class WorkflowStepInputExpression(input: WorkflowStepInput,
 
     def lookupValue(key: String): Checked[WomValue] =
       inputValues.
-        get(FullyQualifiedName(key).id).
+        get(key).
         toRight(s"source value $key not found in input values ${inputValues.mkString("\n")}.  Graph Inputs were ${graphInputs.mkString("\n")}" |> NonEmptyList.one)
+    
+    val expressionInputStrings = graphInputs.toList match {
+      case Nil => None
+      case nonEmpty => Option(nonEmpty)
+    }
 
-    (input.valueFrom, input.source.map(_.fold(WorkflowStepInputSourceToStrings))) match {
+    (input.valueFrom, expressionInputStrings) match {
       case (None, Some(List(id))) =>
         lookupValue(id).toValidated
 
@@ -76,8 +80,5 @@ final case class WorkflowStepInputExpression(input: WorkflowStepInput,
   override def evaluateFiles(inputTypes: Map[String, WomValue], ioFunctionSet: IoFunctionSet, coerceTo: WomType) =
     Set.empty[WomFile].validNel
 
-  override def inputs = graphInputs ++ input.source.toSet.flatMap{ inputSource: InputSource => inputSource match {
-    case WorkflowStepInputSource.String(s) => Set(FullyQualifiedName(s).id)
-    case WorkflowStepInputSource.StringArray(sa) => sa.map(FullyQualifiedName(_).id).toSet
-  }}
+  override def inputs = graphInputs
 }

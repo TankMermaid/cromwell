@@ -33,7 +33,7 @@ final case class ScatterNode private(override val innerGraph: Graph,
     ConnectedInputPort(
       scatterCollectionExpressionNode.identifier.localName.value,
       scatterCollectionExpressionNode.womType,
-      scatterCollectionExpressionNode.singleExpressionOutputPort,
+      scatterCollectionExpressionNode.singleOutputPort,
       _ => this
     )
   }
